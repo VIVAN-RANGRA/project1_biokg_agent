@@ -9,7 +9,6 @@ Advanced RAG over biological knowledge sources with:
 - confidence scoring and provenance tracking
 - checkpointed outputs for Gradio demos and Kaggle runs
 
-This version is designed so you can run a lightweight local or Kaggle smoke test first, then scale up to heavier retrieval and live APIs later.
 
 ## What It Does
 
@@ -181,5 +180,4 @@ The eval passes only if the output includes:
 ## Notes
 
 - The reranker may fall back to heuristic mode even when the advanced pipeline works correctly. That is expected in CPU-safe mode.
-- The graph grows across runs because checkpoints are reused. This is helpful for demos, but if you want a clean session, delete the `checkpoints/` folder and rerun.
 - The bundled data is a compact seed for verification, not the final large-scale corpus. The architecture is ready for larger real data later.
