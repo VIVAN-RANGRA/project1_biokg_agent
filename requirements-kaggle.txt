@@ -1,0 +1,6 @@
+requests
+networkx
+pyvis
+gradio
+numpy
+sentence-transformers
