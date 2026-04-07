@@ -8,15 +8,6 @@ BioKG-Agent is a biology-focused RAG + knowledge graph assistant with:
 - reproducible benchmark tooling (`eval/run_eval.py`)
 - checkpointed artifacts for fast app replay
 
-## Recent Hardening (Apr 2026)
-
-- Removed hardcoded API key behavior. `GROQ_API_KEY` is now env-only.
-- Removed duplicate confidence display at the end of LLM answers.
-- Improved disease/pathway grounding with stronger entity normalization and semantic hints.
-- Improved stability of retrieval serialization (JSON-safe trace output).
-- Added robust benchmark runner behavior (resume support + project-root import safety).
-- Updated ingestion flow to avoid OpenTargets dependency in the default pipeline.
-
 ## Repository Layout
 
 - `app.py`: Gradio app
