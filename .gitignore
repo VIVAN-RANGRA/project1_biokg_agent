@@ -1,4 +1,8 @@
 __pycache__/
 *.pyc
 checkpoints/
+data/
+logs/
+*.log
+eval/results*.json
 .DS_Store

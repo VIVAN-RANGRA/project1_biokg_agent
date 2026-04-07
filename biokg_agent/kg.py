@@ -210,11 +210,27 @@ class BioKnowledgeGraph:
             from pyvis.network import Network
 
             net = Network(height="650px", width="100%", directed=True)
+            _pv_nodes = []
+            _pv_edges = []
             for node, attrs in self.graph.nodes(data=True):
                 net.add_node(node, label=attrs.get("label", node), title=json.dumps(attrs))
+                _pv_nodes.append({"id": str(node), "label": str(attrs.get("label", node)),
+                                   "title": str(attrs.get("type", "entity"))})
+            _eid = 0
             for source, target, attrs in self.graph.edges(data=True):
                 net.add_edge(source, target, label=attrs.get("type", "relation"), title=json.dumps(attrs))
+                _pv_edges.append({"id": _eid, "from": str(source), "to": str(target),
+                                   "label": str(attrs.get("type", ""))})
+                _eid += 1
             net.write_html(str(path))
+            # Save JSON sidecar alongside pyvis HTML
+            try:
+                path.with_suffix(".json").write_text(
+                    json.dumps({"nodes": _pv_nodes, "edges": _pv_edges}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
         except Exception:
             nodes = []
             try:
@@ -222,13 +238,113 @@ class BioKnowledgeGraph:
             except Exception:
                 node_iter = []
             for node, attrs in node_iter:
-                nodes.append({"id": node, **dict(attrs)})
+                nodes.append({"id": str(node), "label": str(attrs.get("label", node)),
+                               "title": str(attrs.get("type", "entity")), **{k: v for k, v in dict(attrs).items() if isinstance(v, (str, int, float, bool))}})
             edges = []
+            edge_id = 0
             try:
                 edge_iter = self.graph.edges(data=True)
             except Exception:
                 edge_iter = []
             for source, target, attrs in edge_iter:
-                edges.append({"source": source, "target": target, **dict(attrs)})
-            path.write_text("<html><body><pre>" + json.dumps({"nodes": nodes, "edges": edges}, indent=2) + "</pre></body></html>", encoding="utf-8")
+                edges.append({"id": edge_id, "from": str(source), "to": str(target),
+                               "label": str(attrs.get("type", ""))})
+                edge_id += 1
+            vis_html = _build_vis_html(nodes, edges)
+            path.write_text(vis_html, encoding="utf-8")
+            # Save compact JSON sidecar so the Gradio app can embed the graph
+            # inline without reading the large HTML file (avoids file-lock issues
+            # on Windows and base64 size limits).
+            sidecar = path.with_suffix(".json")
+            try:
+                sidecar.write_text(
+                    json.dumps({"nodes": nodes, "edges": edges}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
         return path
+
+
+def _build_vis_html(nodes: list, edges: list) -> str:
+    """Build a standalone interactive HTML graph using vis.js (CDN, no install needed)."""
+    nodes_json = json.dumps(nodes)
+    edges_json = json.dumps(edges)
+
+    # Color map for node types
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BioKG Graph</title>
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<style>
+  body {{ margin: 0; font-family: Arial, sans-serif; background: #1a1a2e; color: #eee; }}
+  #graph {{ width: 100%; height: 88vh; border: 1px solid #333; }}
+  #info {{ padding: 8px 14px; font-size: 13px; background: #16213e; }}
+  .tag {{ display:inline-block; padding:2px 8px; border-radius:10px; margin:2px; font-size:12px; }}
+</style>
+</head>
+<body>
+<div id="info">
+  <b>BioKG-Agent</b> &nbsp;&mdash;&nbsp;
+  <span class="tag" style="background:#1a6b3c">genes</span>
+  <span class="tag" style="background:#6b1a4b">drugs</span>
+  <span class="tag" style="background:#1a3b6b">pathways</span>
+  <span class="tag" style="background:#6b5c1a">go_terms</span>
+  <span class="tag" style="background:#444">publications</span>
+  &nbsp; Nodes: {len(nodes)} &nbsp; Edges: {len(edges)}
+</div>
+<div id="graph"></div>
+<script>
+var rawNodes = {nodes_json};
+var rawEdges = {edges_json};
+
+var colorMap = {{
+  "gene": "#27ae60",
+  "drug": "#8e44ad",
+  "pathway": "#2980b9",
+  "go_term": "#d4ac0d",
+  "protein": "#e74c3c",
+  "publication": "#7f8c8d"
+}};
+
+var visNodes = rawNodes.map(function(n) {{
+  return {{
+    id: n.id,
+    label: (n.label || n.id).substring(0, 20),
+    title: n.title || n.id,
+    color: colorMap[n.title] || "#555",
+    font: {{ color: "#fff" }},
+    shape: n.title === "gene" ? "ellipse" : n.title === "drug" ? "box" : "dot"
+  }};
+}});
+
+var visEdges = rawEdges.map(function(e) {{
+  return {{
+    id: e.id,
+    from: e.from,
+    to: e.to,
+    label: e.label || "",
+    arrows: "to",
+    font: {{ size: 10, color: "#aaa", align: "middle" }},
+    color: {{ color: "#555", highlight: "#aaa" }}
+  }};
+}});
+
+var container = document.getElementById("graph");
+var data = {{
+  nodes: new vis.DataSet(visNodes),
+  edges: new vis.DataSet(visEdges)
+}};
+var options = {{
+  layout: {{ improvedLayout: true }},
+  physics: {{ enabled: true, stabilization: {{ iterations: 150 }} }},
+  interaction: {{ hover: true, tooltipDelay: 100 }},
+  nodes: {{ borderWidth: 1.5 }},
+  edges: {{ smooth: {{ type: "dynamic" }} }}
+}};
+var network = new vis.Network(container, data, options);
+</script>
+</body>
+</html>"""

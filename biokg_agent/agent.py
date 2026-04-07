@@ -11,6 +11,15 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover - optional dependency
     requests = None
 
+try:
+    from .tools.uniprot import uniprot_protein_lookup
+    from .tools.kegg import kegg_pathway_lookup
+    from .tools.drugbank import drugbank_target_lookup as drugbank_api_lookup
+except Exception:
+    uniprot_protein_lookup = None  # type: ignore[assignment,misc]
+    kegg_pathway_lookup = None  # type: ignore[assignment,misc]
+    drugbank_api_lookup = None  # type: ignore[assignment,misc]
+
 from .checkpoints import CheckpointStore
 from .config import ProjectConfig, default_config
 from .data import DemoBundle, load_demo_bundle
@@ -25,6 +34,77 @@ def _normalize_gene(text: str) -> str:
 
 def _clip(value: float, lower: float = 0.0, upper: float = 1.0) -> float:
     return max(lower, min(upper, value))
+
+
+QUERY_ENTITY_HINTS: dict[str, list[str]] = {
+    # Disease-centric cues
+    "fanconi anemia": ["BRCA1", "BRCA2", "PALB2", "BRIP1", "RAD51C", "FANCA"],
+    "melanoma and colorectal": ["BRAF", "KRAS", "NRAS", "PIK3CA", "APC", "TP53"],
+    "glioblastoma": ["TP53", "PTEN", "RB1", "CDKN2A", "NF1"],
+    "li-fraumeni": ["TP53", "CHEK2", "MDM2", "CDK4", "RB1"],
+    "diffuse gastric cancer": ["CDH1", "CTNNA1", "TP53", "RHOA", "CTNNB1"],
+    "myeloproliferative neoplasm": ["JAK2", "CALR", "MPL", "STAT5A", "STAT3"],
+    "familial adenomatous polyposis": ["APC", "CTNNB1", "AXIN1", "GSK3B", "TCF7L2", "MYC"],
+    "clear cell renal": ["VHL", "PBRM1", "BAP1", "SETD2", "HIF1A", "HIF2A"],
+    "lynch syndrome": ["MLH1", "MSH2", "MSH6", "PMS2", "PDCD1", "CD274"],
+    "her2-positive breast cancer": ["ERBB2", "GRB7", "TP53", "PIK3CA", "MYC", "TOP2A"],
+    "castration-resistant prostate": ["AR", "PTEN", "TP53", "RB1", "BRCA2", "ERG"],
+    "pancreatic ductal adenocarcinoma": ["KRAS", "TP53", "CDKN2A", "SMAD4", "BRCA2"],
+    "acute myeloid leukemia": ["FLT3", "NPM1", "DNMT3A", "IDH1", "IDH2", "CEBPA"],
+    "multiple myeloma": ["MYC", "CCND1", "FGFR3", "NFKB1", "TRAF3", "KRAS"],
+    "mesothelioma": ["NF2", "BAP1", "CDKN2A", "LATS1", "LATS2", "YAP1"],
+    "hereditary retinoblastoma": ["RB1", "CCND1", "CDK4", "CDKN2A", "E2F1"],
+    "tuberous sclerosis": ["TSC1", "TSC2", "MTOR", "RHEB", "RPTOR"],
+    "bladder cancer": ["FGFR3", "PIK3CA", "TP53", "RB1", "CDKN2A", "ERBB2"],
+    "neurofibromatosis type 1": ["NF1", "KRAS", "NRAS", "MAPK1", "SPRED1"],
+    "myelodysplastic syndromes": ["SF3B1", "SRSF2", "U2AF1", "ZRSR2", "TP53"],
+    # Pathway/mechanism cues
+    "p53 signaling pathway": ["TP53", "BAX", "BBC3", "FAS", "CASP9", "CASP8", "APAF1"],
+    "wnt/beta-catenin": ["CTNNB1", "APC", "YAP1", "LATS1", "LATS2", "TAZ"],
+    "pi3k-akt": ["PIK3CA", "AKT1", "BAD", "NFKB1", "BCL2", "CHUK"],
+    "oncogenic kras": ["KRAS", "RAF1", "BRAF", "PIK3CA", "MAPK1", "AKT1"],
+    "mtorc1": ["MTOR", "RPTOR", "RHEB", "ULK1", "TSC2", "AMPK"],
+    "notch signaling pathway": ["NOTCH1", "RBPJ", "HES1", "MYC", "DTX1", "MAML1"],
+    "mapk/erk": ["MAPK1", "MAPK3", "DUSP1", "DUSP6", "SPRY2", "RAF1"],
+    "tgf-beta": ["TGFB1", "SMAD2", "SMAD3", "SMAD4", "SMAD7", "CDKN1A"],
+    "jak-stat": ["JAK1", "JAK2", "STAT3", "STAT5A", "SOCS1", "SOCS3"],
+    "hif-1alpha": ["HIF1A", "VHL", "VEGFA", "GLUT1", "LDHA", "PHD2"],
+    "atm-chek2": ["ATM", "ATR", "CHEK1", "CHEK2", "CDC25A", "CDC25C", "TP53"],
+    "nf-kb signaling": ["NFKB1", "RELA", "IKBKG", "MYD88", "CARD11", "BCL10"],
+    "ferroptosis": ["GPX4", "SLC7A11", "ACSL4", "TFRC", "NFE2L2"],
+    "ubiquitin-proteasome": ["CCNE1", "CCND1", "CDKN1A", "SKP2", "FBXW7", "APC/C"],
+    "cgas-sting": ["CGAS", "TMEM173", "TBK1", "IRF3", "IFNB1"],
+    "hedgehog pathway": ["SHH", "PTCH1", "SMO", "GLI1", "GLI2", "SUFU"],
+    "polycomb": ["EZH2", "SUZ12", "EED", "BMI1", "RING1B", "CDKN2A"],
+    "unfolded protein response": ["ERN1", "EIF2AK3", "ATF6", "XBP1", "DDIT3", "BCL2"],
+    "yap/taz": ["MST1", "MST2", "LATS1", "LATS2", "YAP1", "WWTR1", "TEAD1"],
+    # Common disease / condition queries (non-cancer)
+    "ulcer": ["PTGS2", "PTGS1", "EGFR", "TGFA", "MUC5AC", "IL1B", "TNF", "NFKB1"],
+    "peptic ulcer": ["PTGS2", "PTGS1", "IL1B", "TNF", "EGFR", "MUC5AC"],
+    "gastric ulcer": ["PTGS2", "PTGS1", "EGFR", "TGFA", "MUC5AC", "IL1B"],
+    "helicobacter pylori": ["PTGS2", "IL1B", "TNF", "NFKB1", "TP53", "CDH1"],
+    "inflammation": ["PTGS2", "TNF", "IL6", "IL1B", "NFKB1", "STAT3", "RELA"],
+    "diabetes": ["INS", "IGF1R", "IRS1", "PIK3CA", "AKT1", "FOXO1", "PPARG"],
+    "type 2 diabetes": ["PPARG", "INS", "IRS1", "AKT1", "FOXO1", "AMPK", "GCGR"],
+    "alzheimer": ["APP", "PSEN1", "PSEN2", "APOE", "BACE1", "MAPT", "CLU"],
+    "parkinson": ["SNCA", "LRRK2", "PARK2", "PINK1", "DJ1", "GBA"],
+    "hypertension": ["ACE", "AGT", "AGTR1", "NOS3", "EDN1", "NPPA", "ADRB1"],
+    "heart failure": ["NPPA", "NPPB", "ACE", "ADRB1", "ADRB2", "PLN", "SERCA2A"],
+    "asthma": ["IL4", "IL13", "IL5", "TSLP", "GATA3", "IFNG", "STAT6"],
+    "rheumatoid arthritis": ["TNF", "IL6", "IL1B", "STAT3", "JAK1", "JAK2", "NFKB1"],
+    "breast cancer": ["BRCA1", "BRCA2", "ERBB2", "ESR1", "PIK3CA", "TP53", "MYC"],
+    "lung cancer": ["EGFR", "KRAS", "ALK", "ROS1", "MET", "TP53", "STK11"],
+    "colorectal cancer": ["APC", "KRAS", "TP53", "SMAD4", "PIK3CA", "BRAF", "MLH1"],
+    "prostate cancer": ["AR", "PTEN", "TP53", "RB1", "BRCA2", "ERG", "NKX3-1"],
+    "leukemia": ["BCR", "ABL1", "FLT3", "JAK2", "NPM1", "CEBPA", "TP53"],
+    "lymphoma": ["MYC", "BCL2", "BCL6", "TP53", "CD19", "CREBBP", "EP300"],
+    "apoptosis": ["TP53", "BCL2", "BAX", "CASP3", "CASP9", "APAF1", "CYCS"],
+    "cell cycle": ["CCND1", "CDK4", "CDK6", "RB1", "CDKN1A", "CDKN2A", "MYC"],
+    "dna repair": ["BRCA1", "BRCA2", "ATM", "RAD51", "PARP1", "MLH1", "MSH2"],
+    "angiogenesis": ["VEGFA", "KDR", "FLT1", "HIF1A", "ANGPT1", "PDGFB", "NRP1"],
+    "metastasis": ["MMP9", "MMP2", "CDH1", "TWIST1", "SNAI1", "VIM", "CTNNB1"],
+    "immunotherapy": ["PDCD1", "CD274", "CTLA4", "CD8A", "IFNG", "TNF", "LAG3"],
+}
 
 
 @dataclass(slots=True)
@@ -81,16 +161,57 @@ class BioKGAgent:
             self.config.checkpoint_dir = self.checkpoint_dir
         self.store = self.store or CheckpointStore(self.config.checkpoint_dir_path)
         self.bundle = self.bundle or load_demo_bundle(self.config.checkpoint_dir_path)
-        self.retriever = self.retriever or HybridRetrievalEngine.from_records(
-            self.bundle.pubmed_records,
-            config=self.config,
-        )
+        if self.retriever is None:
+            # Try to load from saved checkpoint (avoids re-embedding on every startup)
+            _retriever_path = self.config.retriever_checkpoint_path
+            if _retriever_path.exists():
+                try:
+                    self.retriever = HybridRetrievalEngine.load(_retriever_path)
+                    print(f"[agent] Loaded retrieval engine from checkpoint (backend: {self.retriever.dense_backend})")
+                    # Upgrade hashed backend → FAISS if pre-built index is available
+                    if self.retriever.dense_backend == "hashed":
+                        _faiss_path = self.config.checkpoint_dir_path / "faiss_index.bin"
+                        if _faiss_path.exists():
+                            try:
+                                import faiss as _faiss
+                                import numpy as _np
+                                _loaded = _faiss.read_index(str(_faiss_path))
+                                if _loaded.ntotal == len(self.retriever.records):
+                                    self.retriever.faiss_index = _loaded
+                                    self.retriever.dense_backend = "faiss"
+                                    self.retriever.dense_dim = _loaded.d
+                                    self.retriever._get_sentence_model()
+                                    print(f"[agent] Upgraded retriever to FAISS ({_loaded.ntotal:,} vectors, dim={_loaded.d})")
+                            except Exception as _fe:
+                                print(f"[agent] FAISS upgrade failed: {_fe}")
+                except Exception:
+                    self.retriever = None
+        if self.retriever is None:
+            self.retriever = HybridRetrievalEngine.from_records(
+                self.bundle.pubmed_records,
+                config=self.config,
+            )
         self.router = self.router or QueryRouter(config=self.config, planner=self.planner)
         self.kg = self.kg or self.knowledge_graph or BioKnowledgeGraph.from_checkpoint(
             checkpoint_dir=self.config.checkpoint_dir_path,
             graph_checkpoint_name=self.config.graph_checkpoint_name,
         )
         self._seed_graph()
+        self._known_gene_set = set(self.known_genes())
+        if self.config.enable_llm_synthesis and self.config.groq_api_key:
+            try:
+                from .llm import create_llm_backend
+                self._llm = create_llm_backend(
+                    groq_api_key=self.config.groq_api_key,
+                    groq_model=self.config.groq_model,
+                )
+                self._llm.load()
+                print(f"[agent] LLM backend: {self._llm}")
+            except Exception as e:
+                print(f"[agent] LLM init failed: {e}")
+                self._llm = None
+        else:
+            self._llm = None
         if self.save_checkpoints:
             self.save()
 
@@ -110,6 +231,7 @@ class BioKGAgent:
         genes.update(_normalize_gene(key) for key in self.bundle.string_ppi.keys())
         genes.update(_normalize_gene(key) for key in self.bundle.drugbank.keys())
         genes.update(_normalize_gene(value) for value in self.bundle.gene_synonyms.values())
+        genes.update(_normalize_gene(key) for key in self.bundle.gene_annotations.keys())
         return sorted(gene for gene in genes if gene)
 
     def ncbi_gene_lookup(self, gene: str) -> dict[str, Any]:
@@ -206,10 +328,20 @@ class BioKGAgent:
 
     def drugbank_target_lookup(self, gene: str) -> list[dict[str, Any]]:
         gene = _normalize_gene(gene)
-        return [
+        # Start with curated known approved drugs (highest quality data)
+        from .data import CURATED_APPROVED_DRUGS
+        curated = [
+            {**d, "source": "curated"}
+            for d in CURATED_APPROVED_DRUGS.get(gene, [])
+        ]
+        curated_names = {d["drug_name"].lower() for d in curated}
+        # Supplement with ChEMBL/bundle data (deduplicated)
+        bundle_drugs = [
             {**dict(row), "source": row.get("source", "drugbank_bundle")}
             for row in self.bundle.drugbank.get(gene, [])
+            if str(row.get("drug_name", "")).lower() not in curated_names
         ]
+        return curated + bundle_drugs
 
     def gene_ontology_lookup(self, gene: str) -> list[dict[str, Any]]:
         gene = _normalize_gene(gene)
@@ -220,10 +352,42 @@ class BioKGAgent:
 
     def pathway_lookup(self, gene: str) -> list[dict[str, Any]]:
         gene = _normalize_gene(gene)
-        return [
-            {**dict(self.bundle.pathways.get(pathway_id, {"pathway_id": pathway_id, "name": pathway_id})), "source": "pathway_bundle"}
-            for pathway_id in self.bundle.pathway_membership.get(gene, [])
-        ]
+        pw_ids = self.bundle.pathway_membership.get(gene, [])
+        if pw_ids:
+            return [
+                {**dict(self.bundle.pathways.get(pid, {"pathway_id": pid, "name": pid})), "source": "pathway_bundle"}
+                for pid in pw_ids
+            ]
+        # Fall back: use GO biological_process terms as pathway proxies
+        go_ids = self.bundle.gene_annotations.get(gene, [])
+        results = []
+        for gid in go_ids:
+            term = self.bundle.go_terms.get(gid, {})
+            if term.get("namespace") == "biological_process":
+                results.append({
+                    "pathway_id": gid,
+                    "name": term.get("name", gid),
+                    "source": "go_biological_process",
+                })
+        return results
+
+    def uniprot_protein_lookup(self, protein: str) -> dict:
+        protein = _normalize_gene(protein)
+        if self.config.enable_live_apis:
+            try:
+                return uniprot_protein_lookup(protein)
+            except Exception:
+                pass
+        return {"accession": "", "name": protein, "function": "No data available", "source": "fallback"}
+
+    def kegg_pathway_lookup(self, gene: str) -> list[dict]:
+        gene = _normalize_gene(gene)
+        if self.config.enable_live_apis:
+            try:
+                return kegg_pathway_lookup(gene)
+            except Exception:
+                pass
+        return self.pathway_lookup(gene)  # fall back to bundle
 
     def plan_query(self, query: str) -> QueryPlan:
         plan = self.router.plan(query, self.known_genes())
@@ -234,12 +398,48 @@ class BioKGAgent:
                 normalized = _normalize_gene(canonical)
                 if normalized and normalized not in detected_entities:
                     detected_entities.append(normalized)
+        for hinted in self._query_entity_hints(query, known_only=True):
+            normalized = _normalize_gene(hinted)
+            if normalized and normalized not in detected_entities:
+                detected_entities.append(normalized)
         plan.detected_entities = detected_entities
         if detected_entities:
             plan.metadata_filters = {**plan.metadata_filters, "genes": detected_entities}
         if self.save_checkpoints:
             self.store.save_json(plan.to_dict(), self.config.query_plan_name)
         return plan
+
+    def _query_entity_hints(self, query: str, known_only: bool = True) -> list[str]:
+        lowered = query.lower()
+        hints: list[str] = []
+
+        for phrase, entities in QUERY_ENTITY_HINTS.items():
+            if phrase in lowered:
+                hints.extend(entities)
+
+        # Generic biomedical cues that often imply canonical pathway actors.
+        if "jak" in lowered and "stat" in lowered:
+            hints.extend(["JAK1", "JAK2", "STAT3", "STAT5A", "SOCS1", "SOCS3"])
+        if "hippo" in lowered:
+            hints.extend(["YAP1", "WWTR1", "LATS1", "LATS2", "MST1", "MST2", "TEAD1"])
+        if "hypoxia" in lowered:
+            hints.extend(["HIF1A", "VHL", "VEGFA", "GLUT1", "LDHA", "PHD2"])
+        if "apoptosis" in lowered:
+            hints.extend(["BAX", "BBC3", "CASP8", "CASP9", "APAF1", "BCL2"])
+        if "dna damage response" in lowered:
+            hints.extend(["ATM", "ATR", "CHEK1", "CHEK2", "TP53"])
+
+        dedup: list[str] = []
+        seen: set[str] = set()
+        for item in hints:
+            normalized = _normalize_gene(item)
+            if not normalized or normalized in seen:
+                continue
+            if known_only and normalized not in self._known_gene_set:
+                continue
+            seen.add(normalized)
+            dedup.append(item.upper())
+        return dedup
 
     def route_query(self, query: str) -> dict[str, Any]:
         return self.plan_query(query).to_dict()
@@ -299,6 +499,16 @@ class BioKGAgent:
         drugs = self.drugbank_target_lookup(gene)
         go_terms = self.gene_ontology_lookup(gene)
         pathways = self.pathway_lookup(gene)
+
+        uniprot_data = {}
+        if self.config.enable_live_apis:
+            uniprot_data = self.uniprot_protein_lookup(gene)
+            if uniprot_data.get("accession"):
+                self.kg.add_entity(
+                    uniprot_data["accession"], "protein",
+                    properties={"label": uniprot_data.get("name", gene), **uniprot_data}
+                )
+                self.kg.add_relationship(gene, uniprot_data["accession"], "ENCODES", properties={"source": "uniprot"})
 
         self.kg.add_entity(gene, "gene", properties={"label": gene, **summary})
         for row in interactions:
@@ -366,7 +576,7 @@ class BioKGAgent:
             if gene and gene not in seed_genes:
                 seed_genes.append(gene)
 
-        expansions = [self._expand_gene(gene) for gene in seed_genes[:4]]
+        expansions = [self._expand_gene(gene) for gene in seed_genes[:8]]
         for candidate in bundle.candidates[: self.config.rag_top_k]:
             payload = candidate.payload
             pmid = str(payload.get("pmid", ""))
@@ -395,7 +605,64 @@ class BioKGAgent:
         }
         if self.save_checkpoints:
             self.kg.save(self.config.graph_checkpoint_path)
-            self.kg.export_html(self.config.graph_html_path)
+            # Build a focused, query-specific visualization graph.
+            # We deliberately limit the number of edges per category so the
+            # browser renders a clean, readable graph (not the full accumulated
+            # graph that can have thousands of nodes).
+            vis_kg = BioKnowledgeGraph()
+            for expansion in expansions:
+                gene = expansion["gene"]
+                vis_kg.add_entity(gene, "gene", properties={"label": gene})
+                # Top 6 STRING interactions by score
+                for iact in sorted(
+                    expansion["interactions"],
+                    key=lambda x: -int(x.get("score", 0)),
+                )[:6]:
+                    partner = _normalize_gene(str(iact.get("partner", "")))
+                    if not partner:
+                        continue
+                    vis_kg.add_entity(partner, "gene", properties={"label": partner})
+                    vis_kg.add_relationship(
+                        gene, partner, "INTERACTS_WITH",
+                        properties={"score": iact.get("score", 0)},
+                    )
+                # Top 5 drugs, approved-first
+                def _dsort(d):
+                    st = [s.lower() for s in d.get("status", [])]
+                    return (0 if "approved" in st else 1)
+                for drug in sorted(expansion["drugs"], key=_dsort)[:5]:
+                    dname = str(drug.get("drug_name", "")).strip()
+                    did = str(drug.get("drugbank_id", dname))
+                    if not dname:
+                        continue
+                    vis_kg.add_entity(did, "drug", properties={"label": dname})
+                    vis_kg.add_relationship(
+                        did, gene, "TARGETS",
+                        properties={"status": drug.get("status", [])},
+                    )
+                # Top 3 pathways
+                for pw in expansion["pathways"][:3]:
+                    pid = str(pw.get("pathway_id", ""))
+                    if not pid:
+                        continue
+                    vis_kg.add_entity(
+                        pid, "pathway",
+                        properties={"label": pw.get("name", pid)},
+                    )
+                    vis_kg.add_relationship(gene, pid, "IN_PATHWAY")
+                # Top 3 GO terms (biological_process only)
+                bp_terms = [t for t in expansion["go_terms"]
+                            if t.get("namespace") == "biological_process"]
+                for term in bp_terms[:3]:
+                    gid = str(term.get("id", ""))
+                    if not gid:
+                        continue
+                    vis_kg.add_entity(
+                        gid, "go_term",
+                        properties={"label": term.get("name", gid)},
+                    )
+                    vis_kg.add_relationship(gene, gid, "ANNOTATED_WITH")
+            vis_kg.export_html(self.config.graph_html_path)
         return {
             "expansions": expansions,
             "graph_summary": graph_summary,
@@ -457,6 +724,38 @@ class BioKGAgent:
                         "score": 0.8,
                     }
                 )
+            for term in expansion["go_terms"]:
+                term_name = str(term.get("name", "")).lower()
+                if term.get("namespace") == "biological_process":
+                    evidence_table.append(
+                        {
+                            "claim_id": f"go_bp:{term.get('id', '')}:{expansion['gene']}",
+                            "source_id": term.get("id", ""),
+                            "source_type": "go",
+                            "relation": "PARTICIPATES_IN",
+                            "score": 0.7,
+                        }
+                    )
+                if "phosphorylation" in term_name:
+                    evidence_table.append(
+                        {
+                            "claim_id": f"go_phosphorylation:{term.get('id', '')}:{expansion['gene']}",
+                            "source_id": term.get("id", ""),
+                            "source_type": "go",
+                            "relation": "PHOSPHORYLATES",
+                            "score": 0.65,
+                        }
+                    )
+                if "regulation" in term_name:
+                    evidence_table.append(
+                        {
+                            "claim_id": f"go_regulation:{term.get('id', '')}:{expansion['gene']}",
+                            "source_id": term.get("id", ""),
+                            "source_type": "go",
+                            "relation": "REGULATES",
+                            "score": 0.6,
+                        }
+                    )
         return evidence_table
 
     def _compute_confidence(
@@ -500,12 +799,38 @@ class BioKGAgent:
         coverage = min(1.0, len(evidence_table) / max(self.config.min_supporting_evidence * 3, 1))
         source_agreement = min(1.0, len({item["source_type"] for item in evidence_table}) / 4.0)
         path_support = 1.0 / (1.0 + max(0, self.config.max_graph_hops - 1))
-        overall = _clip(
-            0.40 * literature_confidence
-            + 0.20 * coverage
-            + 0.20 * source_agreement
-            + 0.20 * path_support
-        )
+        # Weight components by query type so confidence varies meaningfully
+        qt = plan.query_type
+        if qt == "drug_target":
+            # Drug queries: drug_confidence matters most
+            overall = _clip(
+                0.25 * literature_confidence
+                + 0.15 * coverage
+                + 0.15 * source_agreement
+                + 0.10 * graph_relation_score
+                + 0.25 * drug_confidence
+                + 0.10 * path_support
+            )
+        elif qt == "relationship":
+            # Relationship queries: graph_relation_score matters most
+            overall = _clip(
+                0.25 * literature_confidence
+                + 0.15 * coverage
+                + 0.15 * source_agreement
+                + 0.25 * graph_relation_score
+                + 0.10 * drug_confidence
+                + 0.10 * path_support
+            )
+        else:
+            # Default balanced weighting
+            overall = _clip(
+                0.25 * literature_confidence
+                + 0.15 * coverage
+                + 0.15 * source_agreement
+                + 0.15 * graph_relation_score
+                + 0.15 * drug_confidence
+                + 0.15 * path_support
+            )
         return {
             "literature_confidence": round(literature_confidence, 4),
             "graph_confidence": round(graph_relation_score, 4),
@@ -527,33 +852,104 @@ class BioKGAgent:
         evidence_table = self._build_provenance_table(bundle, graph_context)
         confidence = self._compute_confidence(plan, bundle, graph_context, evidence_table)
 
-        answer_parts = [
-            f"Route: {plan.query_type}.",
-            f"Detected entities: {', '.join(plan.detected_entities) if plan.detected_entities else 'none explicit'}.",
+        def _drug_sort_key(drug):
+            status = [s.lower() for s in drug.get("status", [])]
+            if "approved" in status:
+                return 0
+            for s in status:
+                m = re.match(r"phase (\d+)", s)
+                if m:
+                    return 5 - int(m.group(1))
+            return 10
+
+        # Build a clean plain-text answer (used by API callers and as LLM fallback)
+        entities = plan.detected_entities
+        gene_str = " and ".join(entities) if entities else "the queried gene(s)"
+        qt = plan.query_type
+
+        # Opening sentence
+        if qt in ("drug_target", "mechanistic"):
+            opening = f"{gene_str} is a well-studied therapeutic target."
+        elif qt == "relationship":
+            opening = f"Here is what is known about the relationship involving {gene_str}."
+        elif qt == "pathway":
+            opening = f"Here is what is known about {gene_str} in biological pathways."
+        else:
+            opening = f"Here is a summary of current knowledge about {gene_str}."
+
+        parts = [opening]
+
+        # Approved drugs — name + mechanism, no IDs
+        all_drugs = []
+        for exp in graph_context["expansions"]:
+            for drug in sorted(exp["drugs"], key=_drug_sort_key)[:4]:
+                st = [s.lower() for s in drug.get("status", [])]
+                if "approved" in st:
+                    mech = drug.get("mechanism", f"targets {exp['gene']}")
+                    all_drugs.append(f"{drug.get('drug_name', '')} ({mech})")
+        if all_drugs:
+            parts.append(
+                "Approved targeted therapies include: " + "; ".join(all_drugs[:5]) + "."
+            )
+
+        # Top protein partners — names only, no scores
+        partner_bits: list[str] = []
+        for exp in graph_context["expansions"]:
+            top_iacts = sorted(exp["interactions"], key=lambda x: -int(x.get("score", 0)))[:4]
+            for iact in top_iacts:
+                p = iact.get("partner", "")
+                if p:
+                    partner_bits.append(f"{exp['gene']}–{p}")
+        if partner_bits:
+            parts.append(
+                "Key protein interactions: " + ", ".join(list(dict.fromkeys(partner_bits))[:6]) + "."
+            )
+
+        # Pathways
+        pw_bits: list[str] = []
+        for exp in graph_context["expansions"]:
+            for pw in exp.get("pathways", [])[:2]:
+                name = pw.get("name", "")
+                if name:
+                    pw_bits.append(name)
+        if pw_bits:
+            parts.append(
+                "Pathway involvement: " + "; ".join(list(dict.fromkeys(pw_bits))[:3]) + "."
+            )
+
+        # Literature
+        lit_titles = [
+            c.payload.get("title", "") for c in bundle.candidates[:3]
+            if c.payload.get("title")
         ]
-        if bundle.candidates:
-            titles = [candidate.payload.get("title", "") for candidate in bundle.candidates[:3] if candidate.payload.get("title")]
-            if titles:
-                answer_parts.append("Top literature evidence: " + "; ".join(titles) + ".")
-        relation_bits = []
-        process_bits = []
-        drug_bits = []
-        for expansion in graph_context["expansions"]:
-            for interaction in expansion["interactions"][:2]:
-                relation_bits.append(f"{expansion['gene']} -> {interaction['partner']} (STRING {interaction.get('score', 0)})")
-            for pathway in expansion["pathways"][:2]:
-                process_bits.append(f"{expansion['gene']} in {pathway.get('name', pathway.get('pathway_id', 'pathway'))}")
-            for drug in expansion["drugs"][:2]:
-                drug_bits.append(f"{drug.get('drug_name', '')} targets {expansion['gene']}")
-        if relation_bits:
-            answer_parts.append("Graph relations: " + "; ".join(relation_bits[:6]) + ".")
-        if process_bits:
-            answer_parts.append("Pathway/process evidence: " + "; ".join(process_bits[:6]) + ".")
-        if drug_bits:
-            answer_parts.append("Drug evidence: " + "; ".join(drug_bits[:6]) + ".")
-        answer_parts.append(f"Overall confidence: {confidence['overall_confidence']:.2f}.")
+        if lit_titles:
+            parts.append("Supporting literature: " + "; ".join(lit_titles) + ".")
+
+        conf_pct = int(confidence["overall_confidence"] * 100)
+        parts.append(f"Evidence confidence: {conf_pct}% (from {len(bundle.candidates)} retrieved records).")
         if confidence["overall_confidence"] < self.config.confidence_threshold:
-            answer_parts.append("Evidence is still limited, so treat this answer as tentative.")
+            parts.append("Evidence is limited — treat this answer as preliminary.")
+
+        # LLM synthesis override (when Groq API key or local model is set)
+        if hasattr(self, '_llm') and self._llm is not None:
+            try:
+                from .llm import synthesize_answer
+                llm_answer = synthesize_answer(
+                    query=query,
+                    evidence_table=evidence_table,
+                    graph_summary=graph_context["graph_summary"],
+                    confidence=confidence,
+                    llm=self._llm,
+                    expansions=graph_context.get("expansions", []),
+                    lit_candidates=bundle.candidates[:8],
+                )
+                if llm_answer and len(llm_answer.strip()) > 50:
+                    # UI already renders a confidence footer; avoid duplicate
+                    # trailing confidence text in LLM answers.
+                    parts = [llm_answer.strip()]
+            except Exception as _llm_err:
+                print(f"[agent] LLM synthesis failed: {_llm_err}")
+                # fall back to template answer
 
         checkpoint_paths = {
             "query_plan": str(self.config.query_plan_path),
@@ -567,7 +963,7 @@ class BioKGAgent:
         }
 
         result = AgentResult(
-            answer_text=" ".join(answer_parts),
+            answer_text=" ".join(parts),
             query_plan=plan.to_dict(),
             retrieval_iterations=[iteration.to_dict() for iteration in iterations],
             evidence_table=evidence_table,
@@ -631,6 +1027,17 @@ class BioKGAgent:
         payload["reranker_fallback_used"] = result.confidence_summary["reranker_backend"] == "heuristic"
         payload["retrieval_iterations_count"] = len(result.retrieval_iterations)
         payload["graph_html"] = str(self.config.graph_html_path)
+        # Rich data for the Gradio UI to render structured HTML
+        _gc = graph_context or {}
+        payload["expansions"] = _gc.get("expansions", [])
+        _fb = final_bundle or self.retrieve(plan, query)
+        payload["lit_titles"] = [
+            c.payload.get("title", "")
+            for c in _fb.candidates[:6]
+            if c.payload.get("title")
+        ]
+        # Show total records in the retrieval index, not just the top-K
+        payload["lit_count"] = len(getattr(self.retriever, "records", [])) or len(_fb.candidates)
         if self.save_checkpoints:
             self.store.save_json(
                 {
@@ -693,6 +1100,16 @@ class BioKGAgent:
             store=store,
             planner=planner,
         )
+
+    def attach_llm(self, llm) -> None:
+        """Attach an LLM backend for synthesis and planning."""
+        self._llm = llm
+        try:
+            from .llm import make_planner
+            if self.config.enable_llm_planner:
+                self.router.planner = make_planner(llm)
+        except Exception:
+            pass
 
 
 def build_demo_agent(**kwargs: Any) -> BioKGAgent:

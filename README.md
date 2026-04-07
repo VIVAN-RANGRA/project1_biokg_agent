@@ -1,183 +1,141 @@
 # BioKG-Agent
 
-Advanced RAG over biological knowledge sources with:
+BioKG-Agent is a biology-focused RAG + knowledge graph assistant with:
 
-- hybrid retrieval: dense + BM25 + graph priors
-- explicit query routing
-- reranking with CPU-safe fallback
-- iterative retrieval loops
-- confidence scoring and provenance tracking
-- checkpointed outputs for Gradio demos and Kaggle runs
+- hybrid retrieval (hashed dense + BM25 + graph-aware signals)
+- explicit query routing and iterative retrieval
+- evidence table and source-aware answer synthesis
+- reproducible benchmark tooling (`eval/run_eval.py`)
+- checkpointed artifacts for fast app replay
 
+## Recent Hardening (Apr 2026)
 
-## What It Does
+- Removed hardcoded API key behavior. `GROQ_API_KEY` is now env-only.
+- Removed duplicate confidence display at the end of LLM answers.
+- Improved disease/pathway grounding with stronger entity normalization and semantic hints.
+- Improved stability of retrieval serialization (JSON-safe trace output).
+- Added robust benchmark runner behavior (resume support + project-root import safety).
+- Updated ingestion flow to avoid OpenTargets dependency in the default pipeline.
 
-Given a biology question like:
+## Repository Layout
 
-`What drugs target TP53 pathway proteins?`
+- `app.py`: Gradio app
+- `run_demo.py`: quick smoke checks and single-query CLI
+- `biokg_agent/`: core agent, retrieval, routing, KG, and LLM clients
+- `scripts/`: data ingestion and bundle/index build scripts
+- `eval/benchmark.json`: 100-question evaluation set
+- `eval/run_eval.py`: benchmark runner
+- `checkpoints/`: generated runtime artifacts (not committed)
+- `data/`: downloaded corpora and processed datasets (not committed)
 
-the system can:
-
-1. classify the query with an explicit route plan
-2. run hybrid retrieval over literature records
-3. expand graph evidence from STRING-like interactions, DrugBank-like targets, GO terms, and pathway membership
-4. rerank the evidence
-5. iterate if evidence is still weak
-6. return an answer with confidence, provenance, and saved traces
-
-## Main Files
-
-- [run_demo.py](C:\Users\AMIT\Desktop\BIO_PROJECTS\project1_biokg_agent\run_demo.py): CLI entrypoint for smoke evals and single-query runs
-- [app.py](C:\Users\AMIT\Desktop\BIO_PROJECTS\project1_biokg_agent\app.py): Gradio demo
-- [requirements-kaggle.txt](C:\Users\AMIT\Desktop\BIO_PROJECTS\project1_biokg_agent\requirements-kaggle.txt): Kaggle-friendly installs
-- [biokg_agent/config.py](C:\Users\AMIT\Desktop\BIO_PROJECTS\project1_biokg_agent\biokg_agent\config.py): feature flags, paths, weights, thresholds
-- [biokg_agent/router.py](C:\Users\AMIT\Desktop\BIO_PROJECTS\project1_biokg_agent\biokg_agent\router.py): query planning and iterative evidence checks
-- [biokg_agent/retrieval.py](C:\Users\AMIT\Desktop\BIO_PROJECTS\project1_biokg_agent\biokg_agent\retrieval.py): hybrid retrieval and reranking
-- [biokg_agent/agent.py](C:\Users\AMIT\Desktop\BIO_PROJECTS\project1_biokg_agent\biokg_agent\agent.py): orchestration and final synthesis
-- [biokg_agent/kg.py](C:\Users\AMIT\Desktop\BIO_PROJECTS\project1_biokg_agent\biokg_agent\kg.py): knowledge graph store and export
-- [biokg_agent/data.py](C:\Users\AMIT\Desktop\BIO_PROJECTS\project1_biokg_agent\biokg_agent\data.py): bundled seed data and checkpoint loading
-
-## Quick Start
-
-### 1. Install
+## Setup
 
 ```powershell
 pip install -r requirements-kaggle.txt
 ```
 
-### 2. Run the CPU-safe smoke eval
+### API key setup (PowerShell)
+
+Session only:
+
+```powershell
+$env:GROQ_API_KEY = "YOUR_KEY"
+```
+
+Persist for current user:
+
+```powershell
+[Environment]::SetEnvironmentVariable("GROQ_API_KEY", "YOUR_KEY", "User")
+```
+
+Remove from current session:
+
+```powershell
+Remove-Item Env:\GROQ_API_KEY -ErrorAction SilentlyContinue
+```
+
+## Quick Validation
+
+Smoke eval:
 
 ```powershell
 python .\run_demo.py --smoke-eval --print-json
 ```
 
-This validates:
-
-- routing
-- hybrid retrieval channels
-- reranker fallback behavior
-- iterative retrieval
-- confidence fields
-- provenance output
-- alias normalization such as `IL-6 -> IL6`
-
-### 3. Run one query
+Single query:
 
 ```powershell
 python .\run_demo.py --query "What drugs target TP53 pathway proteins?" --print-json
 ```
 
-### 4. Launch the app
+Launch app:
 
 ```powershell
 python .\app.py
 ```
 
-## Kaggle Copy-Paste Flow
-
-Use this sequence inside a Kaggle notebook terminal or cell:
+## Full Benchmark (100 Questions)
 
 ```powershell
-pip install -r requirements-kaggle.txt
-python .\run_demo.py --smoke-eval --print-json
-python .\run_demo.py --query "Which papers explain BRCA1 and PARP inhibitor resistance?" --print-json
-python .\app.py
+python .\eval\run_eval.py --benchmark .\eval\benchmark.json --output .\eval\results.json
 ```
 
-If you only want a fast verification pass, stop after the smoke eval.
+Resume interrupted run:
 
-## Default Runtime Behavior
+```powershell
+python .\eval\run_eval.py --resume .\eval\results.json --output .\eval\results.json
+```
 
-The defaults are intentionally CPU-safe:
+Filter by category:
 
-- `dense_backend = "hashed"`
-- `reranker_backend = "heuristic"`
-- `enable_live_apis = False`
+```powershell
+python .\eval\run_eval.py --category pathway_mechanism --output .\eval\results_pathway.json
+```
 
-That means:
+## Data Pipeline (No OpenTargets in Default Flow)
 
-- no heavy embedding model download is required for smoke tests
-- no cross-encoder is required to verify the pipeline
-- no live API dependency is needed for local correctness checks
+One-shot script:
 
-## Switching To Heavier Kaggle Mode
+```bash
+bash scripts/run_all.sh
+```
 
-Edit [biokg_agent/config.py](C:\Users\AMIT\Desktop\BIO_PROJECTS\project1_biokg_agent\biokg_agent\config.py) if you want stronger but heavier retrieval:
+Manual steps:
 
-- set `dense_backend = "auto"` or `"sentence_transformers"`
-- set `reranker_backend = "cross_encoder"`
-- keep `enable_reranker = True`
-- optionally set `enable_live_apis = True`
-- optionally set `ncbi_api_key`
+```powershell
+python .\scripts\ingest_pubmed.py --gene-list .\data\top_500_genes.txt --genes 500 --abstracts-per-gene 1200 --workers 4 --batch-size 100 --output .\data\pubmed_abstracts.jsonl
+python .\scripts\ingest_string.py --output .\data\string_ppi.jsonl --score-threshold 700
+python .\scripts\ingest_chembl_approved.py --output .\data\drugbank_targets.jsonl --target-approved-drugs 2600
+python .\scripts\ingest_go.py --output-terms .\data\go_terms.jsonl --output-annotations .\data\gene_annotations.jsonl
+python .\scripts\build_index.py --data-dir .\data\ --output-dir .\checkpoints\ --batch-size 512
+```
 
-Recommended pattern:
+For a smaller reproducible bundle build:
 
-1. verify with CPU-safe mode
-2. turn on dense models
-3. turn on cross-encoder reranking
-4. turn on live APIs only when the rest is stable
+```powershell
+python .\scripts\build_index.py --data-dir .\data\ --output-dir .\checkpoints\ --max-pubmed-records 300000 --max-partners-per-gene 80 --batch-size 512
+```
 
-## Checkpoint Artifacts
+## Reproducibility Notes
 
-Every run writes reusable artifacts to `checkpoints/`, including:
+- `eval/run_eval.py` writes partial results after each question, so interrupted runs can resume safely.
+- `checkpoints/`, `data/`, `logs/`, and evaluation result dumps are git-ignored by default.
+- Defaults are CPU-safe (`hashed` dense backend + heuristic reranker), so local verification does not require large model downloads.
 
-- `query_plan.json`
-- `retrieval_trace.json`
-- `rerank_trace.json`
-- `iteration_trace.json`
-- `confidence_report.json`
-- `provenance_table.json`
-- `smoke_eval.json`
-- `last_query.json`
-- `last_query_result.json`
-- `kg_session.pkl`
-- `kg_graph.html`
-- `simple_retrieval_index.pkl`
-- `demo_bundle.json`
+## Current Benchmark Snapshot
 
-These are what make the app demo and video workflow easy to replay without rerunning the entire flow.
+Latest hardened 100Q run (`eval/results_full_300k_hardened_v2.json`):
 
-## Public API Summary
-
-Key methods in [biokg_agent/agent.py](C:\Users\AMIT\Desktop\BIO_PROJECTS\project1_biokg_agent\biokg_agent\agent.py):
-
-- `plan_query(query)`
-- `route_query(query)`
-- `pubmed_rag_search(query, ...)`
-- `string_interactions(gene, ...)`
-- `drugbank_target_lookup(gene)`
-- `gene_ontology_lookup(gene)`
-- `pathway_lookup(gene)`
-- `invoke(query)`
-- `answer(query)`
-
-Key classes:
-
-- `BioKGAgent`
-- `QueryRouter`
-- `QueryPlan`
-- `HybridRetrievalEngine`
-- `RetrievalBundle`
-- `BioKnowledgeGraph`
-
-## Smoke Eval Scenarios
-
-The built-in smoke suite currently checks:
-
-- TP53 pathway drug question
-- BRCA1 literature-focused question
-- iterative TP53 therapy connection question
-- IL-6 alias normalization question
-
-The eval passes only if the output includes:
-
-- a valid route type
-- the expected retrieval channels
-- at least the expected iteration count
-- valid confidence values in `[0, 1]`
-- a non-empty provenance table
+- pass rate: `0.87`
+- entity recall: `0.7173`
+- keyword recall: `0.4615`
+- relationship recall: `0.3482`
+- avg confidence: `0.7518`
 
 ## Notes
 
 - The reranker may fall back to heuristic mode even when the advanced pipeline works correctly. That is expected in CPU-safe mode.
 - The bundled data is a compact seed for verification, not the final large-scale corpus. The architecture is ready for larger real data later.
+- The app is designed to degrade gracefully in CPU-only mode.
+- If you want a clean run, remove `checkpoints/` before rebuilding.
+- Data quality and corpus size still matter for rare, highly niche biomedical questions.

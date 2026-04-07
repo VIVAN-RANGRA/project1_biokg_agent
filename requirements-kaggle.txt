@@ -4,3 +4,9 @@ pyvis
 gradio
 numpy
 sentence-transformers
+faiss-cpu
+pyngrok
+torch
+transformers
+autoawq
+accelerate

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Sequence
 
@@ -77,23 +78,37 @@ class QueryRouter:
 
     def _detect_entities(self, query: str, gene_catalog: Sequence[str]) -> list[str]:
         query_upper = query.upper()
-        detected = [gene for gene in gene_catalog if gene and gene in query_upper]
+        normalized_tokens = {
+            re.sub(r"[^A-Z0-9]", "", token.upper())
+            for token in re.findall(r"[A-Za-z0-9\-_./]+", query)
+        }
+        normalized_tokens.discard("")
+        # Use word-boundary matching to avoid false positives like "EGF" inside "EGFR"
+        # Sort catalog longest-first so longer symbols (e.g. EGFR) take priority over
+        # short substrings (e.g. EGF) when the same match region is claimed.
+        sorted_catalog = sorted(gene_catalog, key=len, reverse=True)
         seen: set[str] = set()
         ordered = []
-        for gene in detected:
-            if gene not in seen:
-                seen.add(gene)
-                ordered.append(gene)
+        for gene in sorted_catalog:
+            if not gene:
+                continue
+            gene_norm = re.sub(r"[^A-Z0-9]", "", gene.upper())
+            exact_match = re.search(r'\b' + re.escape(gene) + r'\b', query_upper) is not None
+            normalized_match = bool(gene_norm and gene_norm in normalized_tokens)
+            if exact_match or normalized_match:
+                if gene not in seen:
+                    seen.add(gene)
+                    ordered.append(gene)
         return ordered
 
     def _fallback_plan(self, query: str, detected_entities: Sequence[str]) -> QueryPlan:
         lowered = query.lower()
-        if any(term in lowered for term in ["mechanism", "why", "how", "pathway", "process", "therapy"]):
-            query_type = "mechanistic"
-            retrieval_modes = ["dense", "bm25", "graph"]
-        elif any(term in lowered for term in ["interact", "relationship", "connect", "path", "link"]):
+        if any(term in lowered for term in ["interact", "relationship", "bind", "complex", "link"]):
             query_type = "relationship"
             retrieval_modes = ["graph", "dense", "bm25"]
+        elif any(term in lowered for term in ["mechanism", "why", "how", "pathway", "process", "therapy"]):
+            query_type = "mechanistic"
+            retrieval_modes = ["dense", "bm25", "graph"]
         elif any(term in lowered for term in ["paper", "study", "abstract", "literature", "pubmed"]):
             query_type = "literature"
             retrieval_modes = ["dense", "bm25"]
